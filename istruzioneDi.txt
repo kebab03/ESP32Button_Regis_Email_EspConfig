@@ -1,0 +1,13 @@
+set FLASK_APP=nome_file.py,  esempio main.py oppure Try3.py
+    
+pip install Flask-Migrate
+
+app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///yourdatabase.db'  # Adatta al tuo database
+
+    db.init_app(app)
+    migrate.init_app(app, db)
+flask db init
+
+flask db migrate -m "Aggiunta del campo age a User"
+flask db upgrade
