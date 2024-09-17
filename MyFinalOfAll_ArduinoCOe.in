@@ -1,0 +1,509 @@
+
+
+//const char* ssid = "Wokwi-GUEST";
+//const char* password = "";
+// const char* ssid = "TCL 20Y";
+// const char* password = "123456al";
+#include <WiFi.h>
+#include <BluetoothSerial.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <Preferences.h>
+#define host "http://"
+
+// Flag per attivare il Bluetooth e aggiornare le variabili
+volatile bool updateBluetoothFlag = false;
+
+
+const int maxButtonLabels = 15; // Adjust if you have more buttons
+
+BluetoothSerial SerialBT; // Oggetto BluetoothSerial
+Preferences preferences;
+
+char btPassword[128];  // Password ricevuta via Bluetooth
+char email[128];       // Email ricevuta via Bluetooth
+char emailpass[128];   // Email password ricevuta via Bluetooth
+
+char login_url[128]; // URL per login
+char url[128];       // URL per fetchJsonData()
+char path[128];      // URL per sendButtonState()
+
+
+String ssid ;
+String password ;
+String emailInput  ;
+String emailpassInput ;
+String loginUrlInput ;
+
+String buttonNames[maxButtonLabels];
+String buttonStates[maxButtonLabels];
+// Arrays to store the previous button labels and states
+String prevButtonLabels[maxButtonLabels];
+String prevButtonStates[maxButtonLabels];
+
+String stateStr;         // Declare globally
+String buttonLabelStr;  // Declare globally
+//String loginPayload;
+//char loginPayload[256];  
+
+String payload;
+String session_id; // Per memorizzare il session_id
+
+int buttonPins[maxButtonLabels] = {2, 5, 12, 14, 15, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+
+
+
+
+struct Button {
+	const uint8_t PIN;
+	uint32_t numberKeyPresses;
+	bool pressed;
+	bool toggleState;          // Variabile per memorizzare lo stato di toggle
+	unsigned long lastPressTime; // Per il debounce
+};
+
+Button button1 = {14, 0, false, false, 0};
+const unsigned long debounceDelay = 50;  // Delay di debounce in millisecondi
+
+void sendButtonState() {
+
+HTTPClient http;
+    // Deserialize the existing payload
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        Serial.print("Deserialization failed: ");
+        Serial.println(error.c_str());
+        return;
+    }
+
+    // Extract button labels and states as strings
+    String buttonLabelsStr = doc["buttonLabel"].as<String>();
+    String buttonStatesStr = doc["state"].as<String>();
+
+    // Replace single quotes with double quotes to make it valid JSON
+    buttonLabelsStr.replace("'", "\"");
+    buttonStatesStr.replace("'", "\"");
+
+    // Parse the strings into JSON arrays
+    DynamicJsonDocument labelsDoc(128);
+    DynamicJsonDocument statesDoc(128);
+
+    DeserializationError labelsError = deserializeJson(labelsDoc, buttonLabelsStr);
+    if (labelsError) {
+        Serial.print("Error parsing buttonLabels JSON: ");
+        Serial.println(labelsError.c_str());
+        return;
+    }
+
+    DeserializationError statesError = deserializeJson(statesDoc, buttonStatesStr);
+    if (statesError) {
+        Serial.print("Error parsing buttonStates JSON: ");
+        Serial.println(statesError.c_str());
+        return;
+    }
+
+    // Create a new JSON document for the updated payload
+    StaticJsonDocument<512> newJsonPayload;
+    JsonArray jsonButtonLabelsArray = newJsonPayload.createNestedArray("buttonLabel");
+    JsonArray jsonButtonStatesArray = newJsonPayload.createNestedArray("state");
+    JsonArray jsonButtonPinsArray = newJsonPayload.createNestedArray("buttonPin");
+
+    // Add button labels and states to the new JSON payload
+    for (int i = 0; i < labelsDoc.size(); i++) {
+        jsonButtonLabelsArray.add(labelsDoc[i].as<String>());
+        jsonButtonStatesArray.add(statesDoc[i].as<String>());
+        jsonButtonPinsArray.add(buttonPins[i]); // Add corresponding pin
+    }
+
+    // Serialize the new JSON payload to a string
+    String jsonStr;
+    serializeJson(newJsonPayload, jsonStr);
+
+    // Print the serialized JSON payload
+    Serial.println("Serialized JSON payload:");
+    Serial.println(jsonStr);
+
+    // Here you would send the HTTP request with the `jsonStr` payload
+    // For example, using HTTPClient as in your existing code
+
+Serial.println("################path######## in send but####################");
+Serial.println(path);
+http.begin(path);
+  // Set headers one at a time
+http.addHeader("Content-Type", "application/json");
+http.addHeader("Cookie", "session_id=" + session_id);
+Serial.println("-----------fine---PayLoad---sono in sendButto-----");
+  // Send the POST request with the payload
+int httpResponseCode = http.POST(jsonStr);
+if (httpResponseCode > 0) {
+    Serial.print("HTTP ");
+    Serial.println(httpResponseCode);
+    String response = http.getString();
+    Serial.println(response);
+} else {
+    Serial.print("Error code: ");
+    Serial.println(httpResponseCode);
+}
+http.end();
+
+}
+
+void IRAM_ATTR myisr() {
+	unsigned long currentTime = millis();
+	if (currentTime - button1.lastPressTime > debounceDelay) {
+		button1.numberKeyPresses++;
+		button1.pressed = true;
+		button1.toggleState = !button1.toggleState;  // Inverte lo stato
+		digitalWrite(18, button1.toggleState ? HIGH : LOW);  // Toggle pin 18
+		button1.lastPressTime = currentTime;
+
+		// Attiva il flag per gestire il Bluetooth nel loop
+		updateBluetoothFlag = true;
+	}
+}
+
+void login() {
+    if (WiFi.status() == WL_CONNECTED) {
+        HTTPClient http;
+        http.begin(login_url);
+            Serial.print("121 Login login_url: ");
+            Serial.println(login_url);
+        http.addHeader("Content-Type", "application/json");
+        // Login data
+String logindata = "{\"email\":\"" + emailInput + "\",\"password\":\"" + emailpassInput + "\"}";
+        //snprintf(loginPayload, sizeof(loginPayload), "{\"email\":\"%s\",\"password\":\"%s\"}", emailInput, emailpassInput);
+       // "nafimuddin1976@gmail.com"
+        //String payload = "{\"email\":\"leon_asha@hotmail.com\",\"password\":\"admin1234\"}";
+        //String payload = "{\"email\":\"leon_asha@hotmail.com\",\"password\":\"leeon1234\"}";
+        //int httpResponseCode = http.POST(payload);
+        Serial.print("178 loginPayload : ");
+        Serial.println(logindata);
+               // Stampa il payload per il debug
+        Serial.print("logindata: ");
+        Serial.println(logindata);
+        int httpResponseCode = http.POST(logindata);
+        if (httpResponseCode > 0) {
+            String responseBody = http.getString();
+            Serial.print("Login response content: ");
+            Serial.println(responseBody);
+            // Parse response
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, responseBody);           
+            if (error) {
+                Serial.print("Deserialization failed: ");
+                Serial.println(error.c_str());
+                return; // Exit the function if deserialization fails
+            }          
+            String status = doc["status"];
+            if (status == "success") {
+                session_id = doc["session_id"].as<String>();
+                Serial.print("Session ID received: ");
+                Serial.println(session_id);                
+                // Set session ID as a cookie
+                http.addHeader("Cookie", "session_id=" + session_id);
+            } else {
+                Serial.println("Login failed.");
+            }
+        } else {
+            Serial.print("Error code: ");
+            Serial.println(httpResponseCode);
+        }
+        
+        http.end();
+    } else {
+        Serial.println("WiFi not connected");
+    }
+}
+
+void fetchJsonData() { 
+if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.print(" 212 Fetching  in fetchJsonData " + String(url) + "... ");
+    HTTPClient http;
+    http.begin(url);
+    http.addHeader("Cookie", "session_id=" + session_id); // Send session ID in cookies
+
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode > 0) {
+        Serial.print("HTTP ");
+        Serial.println(httpResponseCode);
+        payload = http.getString();
+        Serial.println("-----payload-------");
+        Serial.println(payload);
+    } else {
+        Serial.print("Error code: ");
+        Serial.println(httpResponseCode);
+        Serial.println(":-(");
+    }
+    http.end();
+} else {
+            Serial.println("\n Riavvia perche Impossibile connettersi al Wi-Fi.");
+        }
+
+}
+
+
+void ginitiate() {
+    fetchJsonData();
+
+    if (payload.isEmpty()) {
+        Serial.println("Payload is empty.");
+        return; // Exit if there's no payload
+    }
+
+    // Create a StaticJsonDocument to hold the deserialized JSON
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, payload); // Deserialize the JSON
+
+    // Check for errors during deserialization
+    if (error) {
+        Serial.print("Deserialization failed: ");
+        Serial.println(error.c_str());
+        return; // Exit the function if deserialization fails
+    }
+
+    // Extract buttonLabel and state as strings
+    buttonLabelStr = doc["buttonLabel"].as<String>();
+    stateStr = doc["state"].as<String>();
+
+    // Remove single quotes and brackets from the string representations
+    buttonLabelStr.replace("'", ""); // Remove single quotes
+    buttonLabelStr.replace("[", ""); // Remove opening bracket
+    buttonLabelStr.replace("]", ""); // Remove closing bracket
+    stateStr.replace("'", ""); // Remove single quotes
+    stateStr.replace("[", ""); // Remove opening bracket
+    stateStr.replace("]", ""); // Remove closing bracket
+
+    // Split the strings by comma and store in arrays
+    int buttonCount = 0;
+    int startIndex = 0;
+    int endIndex = buttonLabelStr.indexOf(',');
+
+    // Process button labels
+    while (endIndex != -1 && buttonCount < maxButtonLabels) {
+        String label = buttonLabelStr.substring(startIndex, endIndex);
+        label.trim(); // Remove any leading/trailing whitespace
+        buttonNames[buttonCount] = label;
+        startIndex = endIndex + 1;
+        endIndex = buttonLabelStr.indexOf(',', startIndex);
+        buttonCount++;
+    }
+    // Add the last button label
+    if (startIndex < buttonLabelStr.length() && buttonCount < maxButtonLabels) {
+        String label = buttonLabelStr.substring(startIndex);
+        label.trim();
+        buttonNames[buttonCount] = label;
+        buttonCount++;
+    }
+
+    // Process states similarly
+    startIndex = 0;
+    endIndex = stateStr.indexOf(',');
+
+    for (int i = 0; i < buttonCount; i++) {
+        if (endIndex != -1) {
+            String state = stateStr.substring(startIndex, endIndex);
+            state.trim();
+            buttonStates[i] = state;
+            startIndex = endIndex + 1;
+            endIndex = stateStr.indexOf(',', startIndex);
+        } else {
+            // For the last state
+            String state = stateStr.substring(startIndex);
+            state.trim();
+            buttonStates[i] = state;
+        }
+    }
+
+    // Check and update pin states
+    Serial.print("Number of buttons: ");
+    Serial.println(buttonCount);
+    for (int i = 0; i < buttonCount; i++) {
+        // Only update pinMode if the label has changed
+        if (buttonNames[i] != prevButtonLabels[i]) {
+            pinMode(buttonPins[i], OUTPUT);
+            prevButtonLabels[i] = buttonNames[i];
+        }
+
+        // Only update digitalWrite if the state has changed
+        if (buttonStates[i] != prevButtonStates[i]) {
+            if (buttonStates[i] == "on") {
+                digitalWrite(buttonPins[i], HIGH); // Turn on the pin
+                Serial.println("Pin " + String(buttonPins[i]) + " is set to HIGH");
+            } else {
+                digitalWrite(buttonPins[i], LOW); // Turn off the pin
+                Serial.println("Pin " + String(buttonPins[i]) + " is set to LOW");
+            }
+            prevButtonStates[i] = buttonStates[i];
+        } else {
+            Serial.println("Pin " + String(buttonPins[i]) + " state remains " + buttonStates[i]);
+        }
+    }
+}
+
+
+
+
+
+void setup() {
+  Serial.begin(19200);
+
+    // Avvio Bluetooth
+  pinMode(button1.PIN, INPUT_PULLUP);
+	pinMode(18, OUTPUT);
+	attachInterrupt(button1.PIN, myisr, FALLING);//button1.PIN = 14 
+
+	// Apri lo spazio di archiviazione NVS
+	preferences.begin("my-app", false);  // "my-app" è il namespace
+
+	// Leggi le preferenze al primo avvio
+	ssid = preferences.getString("ssid", "default_ssid");
+	password = preferences.getString("password", "default_password");
+	emailInput = preferences.getString("email", "default_email");
+	emailpassInput = preferences.getString("emailpass", "default_emailpass");
+    
+  loginUrlInput = preferences.getString("loginUrlInput", " defaul_loginUrlInput");
+
+    
+	// Stampa le credenziali caricate
+	Serial.println("SSID salvato: " + ssid);
+	Serial.println("Password salvata: " + password);
+	Serial.println("Email salvata: " + emailInput);
+	Serial.println("Email Password salvata: " + emailpassInput);
+
+  Serial.println("loginUrlInput salvata: " + loginUrlInput);
+			//String loginUrlInput = data.substring(fourthSplit + 1);
+
+			// Configura URL e path
+	snprintf(login_url, sizeof(login_url), "%s%s/loginPg", host, loginUrlInput.c_str());
+	snprintf(url, sizeof(url), "%s%s/state", host, loginUrlInput.c_str());
+	snprintf(path, sizeof(path), "%s%s/Pstate", host, loginUrlInput.c_str());
+
+
+        // Connessione alla rete Wi-Fi
+        WiFi.begin(ssid.c_str(), password.c_str());
+
+        Serial.print("Connessione a Wi-Fi  in setup ");
+        int wifiAttempt = 0;
+        while (WiFi.status() != WL_CONNECTED && wifiAttempt < 10) {
+            delay(1000);
+            Serial.print(".");
+            wifiAttempt++;
+        }
+
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nConnesso a Wi-Fi.");
+       //     login();  // Effettua il login con le credenziali specificate
+        } else {
+            Serial.println("\nImpossibile connettersi al Wi-Fi.");
+        }
+
+        pinMode(22, OUTPUT);  // Imposta il pin 2 come uscita
+        login();
+    
+}
+
+void loop() {
+
+
+if (updateBluetoothFlag) {
+		updateBluetoothFlag = false;  // Resetta il flag
+
+		// Avvia il Bluetooth
+		if (!SerialBT.begin("ESP32test")) {
+			Serial.println("Errore nell'avvio del Bluetooth.");
+			while (1);
+		}
+		Serial.println("Bluetooth avviato. In attesa di dati...");
+      // Loop fino a quando non si connette un dispositivo Bluetooth
+    while (!SerialBT.hasClient()) {
+        // Fai lampeggiare il LED sul pin 2
+        digitalWrite(22, HIGH);
+        delay(500);
+        digitalWrite(22, LOW);
+        delay(500);
+    }
+
+    // Quando un dispositivo Bluetooth è connesso
+    Serial.println("Dispositivo Bluetooth connesso.");
+    digitalWrite(2, HIGH);  // Mantieni il LED acceso
+		// Attendi fino a 2 minuti per ricevere i dati via Bluetooth
+		unsigned long startTime = millis();
+		while (!SerialBT.available()) {
+			if (millis() - startTime > 220000) {  // Timeout di 2 minuti
+				Serial.println("Timeout in attesa dei dati Bluetooth.");
+				return;
+			}
+			delay(100);  // Ridurre l'uso della CPU
+		}
+
+		// Leggi i dati ricevuti
+		String data = SerialBT.readString();
+		Serial.println("Dati ricevuti: " + data);
+
+		// Parsing dei dati ricevuti
+		int firstSplit = data.indexOf(';');
+		int secondSplit = data.indexOf(';', firstSplit + 1);
+		int thirdSplit = data.indexOf(';', secondSplit + 1);
+		int fourthSplit = data.indexOf(';', thirdSplit + 1);
+
+		if (firstSplit > 0 && secondSplit > firstSplit && thirdSplit > secondSplit && fourthSplit > thirdSplit) {
+			ssid = data.substring(0, firstSplit);
+			password = data.substring(firstSplit + 1, secondSplit);
+			emailInput = data.substring(secondSplit + 1, thirdSplit);
+			emailpassInput = data.substring(thirdSplit + 1, fourthSplit);
+			String MainUrlInput = data.substring(fourthSplit + 1);
+
+			// Configura URL e path
+/* 			 */
+      snprintf(login_url, sizeof(login_url), "%s%s/loginPg", host, MainUrlInput.c_str());
+			snprintf(url, sizeof(url), "%s%s/state", host, MainUrlInput.c_str());
+			snprintf(path, sizeof(path), "%s%s/Pstate", host, MainUrlInput.c_str()); 
+
+			// Copia le credenziali nelle variabili permanenti
+			preferences.putString("ssid", ssid);
+			preferences.putString("password", password);
+			preferences.putString("email", emailInput);
+			preferences.putString("emailpass", emailpassInput);
+
+      preferences.putString("loginUrlInput", MainUrlInput);
+
+			// Stampa le nuove credenziali
+			Serial.println("Nuovo SSID: " + ssid);
+			Serial.println("Nuova Password: " + password);
+			Serial.println("Nuova Email: " + emailInput);
+			Serial.println("Nuova Email Password: " + emailpassInput);
+            Serial.println("Nuova  MainUrlInput : " + MainUrlInput);
+		}
+
+		// Chiudi la connessione Bluetooth
+		SerialBT.end();
+
+    login();
+	}
+
+
+
+if (WiFi.status() == WL_CONNECTED) {
+    
+
+    ginitiate();
+    Serial.print("______-----in loop-----buttons ==stateStr==========");
+    Serial.println(stateStr);
+    Serial.print("__315 __-----in loop-----buttons ==buttonLabelStr==========");
+    Serial.println(buttonLabelStr);
+    Serial.println("___prima di sendButtonState() ");
+    sendButtonState();
+
+    Serial.println("295 Dopo  di sendButtonState() ");
+    delay(5000); // Adjust the delay as needed
+} else {         WiFi.begin(ssid.c_str(), password.c_str());
+
+    Serial.print("Connessione a Wi-Fi 4m loop ");
+            //Serial.println("\nImpossibile connettersi al Wi-Fi.");
+        }
+
+
+}
